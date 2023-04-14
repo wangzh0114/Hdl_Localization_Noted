@@ -34,18 +34,16 @@
 
 namespace hdl_localization {
 
-// 继承nodelet::Nodelet
 class HdlLocalizationNodelet : public nodelet::Nodelet {
 public:
   using PointT = pcl::PointXYZI;
-  // 初始化tf_buffer、tf_listener
+
   HdlLocalizationNodelet() : tf_buffer(), tf_listener(tf_buffer) {
   }
   virtual ~HdlLocalizationNodelet() {
   }
 
   void onInit() override {
-    // 初始化三个句柄
     nh = getNodeHandle();
     mt_nh = getMTNodeHandle();
     private_nh = getPrivateNodeHandle();
@@ -53,44 +51,41 @@ public:
     initialize_params();
 
     robot_odom_frame_id = private_nh.param<std::string>("robot_odom_frame_id", "robot_odom");
-    // launch里是velodyne
     odom_child_frame_id = private_nh.param<std::string>("odom_child_frame_id", "base_link");
 
     use_imu = private_nh.param<bool>("use_imu", true);
-    // imu是否倒置
     invert_acc = private_nh.param<bool>("invert_acc", false);
     invert_gyro = private_nh.param<bool>("invert_gyro", false);
-    // 若使用imu，定义订阅函数
     if (use_imu) {
       NODELET_INFO("enable imu-based prediction");
-      imu_sub = mt_nh.subscribe("/gpsimu_driver/imu_data", 256, &HdlLocalizationNodelet::imu_callback, this);
+      // imu_sub = mt_nh.subscribe("/gpsimu_driver/imu_data", 256, &HdlLocalizationNodelet::imu_callback, this);
+      imu_sub = mt_nh.subscribe("/imu_data", 256, &HdlLocalizationNodelet::imu_callback, this);
     }
-    // 点云数据、全局地图、初始位姿的订阅。initialpose_sub只是用于rviz划点用的
-    points_sub = mt_nh.subscribe("/velodyne_points", 5, &HdlLocalizationNodelet::points_callback, this);
+    // points_sub = mt_nh.subscribe("/velodyne_points", 5, &HdlLocalizationNodelet::points_callback, this);
+    points_sub = mt_nh.subscribe("/pandar", 5, &HdlLocalizationNodelet::points_callback, this);
     globalmap_sub = nh.subscribe("/globalmap", 1, &HdlLocalizationNodelet::globalmap_callback, this);
     initialpose_sub = nh.subscribe("/initialpose", 8, &HdlLocalizationNodelet::initialpose_callback, this);
-    // 发布里程计信息，对齐后的点云数据，以及状态
+    rtk_sub = nh.subscribe("/bestpos", 8, &HdlLocalizationNodelet::rtk_callback, this);
+
     pose_pub = nh.advertise<nav_msgs::Odometry>("/odom", 5, false);
     aligned_pub = nh.advertise<sensor_msgs::PointCloud2>("/aligned_points", 5, false);
     status_pub = nh.advertise<ScanMatchingStatus>("/status", 5, false);
 
     // global localization
-    // TODO: 定义两个服务
     use_global_localization = private_nh.param<bool>("use_global_localization", true);
     if(use_global_localization) {
       NODELET_INFO_STREAM("wait for global localization services");
       ros::service::waitForService("/hdl_global_localization/set_global_map");
       ros::service::waitForService("/hdl_global_localization/query");
-      // 设置两个client
+
       set_global_map_service = nh.serviceClient<hdl_global_localization::SetGlobalMap>("/hdl_global_localization/set_global_map");
       query_global_localization_service = nh.serviceClient<hdl_global_localization::QueryGlobalLocalization>("/hdl_global_localization/query");
-      // 设置service
+
       relocalize_server = nh.advertiseService("/relocalize", &HdlLocalizationNodelet::relocalize, this);
     }
   }
 
 private:
-  // 设置配准方法
   pcl::Registration<PointT, PointT>::Ptr create_registration() const {
     std::string reg_method = private_nh.param<std::string>("reg_method", "NDT_OMP");
     std::string ndt_neighbor_search_method = private_nh.param<std::string>("ndt_neighbor_search_method", "DIRECT7");
@@ -99,9 +94,7 @@ private:
 
     if(reg_method == "NDT_OMP") {
       NODELET_INFO("NDT_OMP is selected");
-      // 定义ndt指针
       pclomp::NormalDistributionsTransform<PointT, PointT>::Ptr ndt(new pclomp::NormalDistributionsTransform<PointT, PointT>());
-      // ndt参数与搜索方法。默认DIRECT7，作者说效果不好可以尝试改为DIRECT1
       ndt->setTransformationEpsilon(0.01);
       ndt->setResolution(ndt_resolution);
       if (ndt_neighbor_search_method == "DIRECT1") {
@@ -122,7 +115,6 @@ private:
       return ndt;
     } else if(reg_method.find("NDT_CUDA") != std::string::npos) {
       NODELET_INFO("NDT_CUDA is selected");
-      // 定义ndt_cuda指针
       boost::shared_ptr<fast_gicp::NDTCuda<PointT, PointT>> ndt(new fast_gicp::NDTCuda<PointT, PointT>);
       ndt->setResolution(ndt_resolution);
 
@@ -146,7 +138,7 @@ private:
       }
       return ndt;
     }
-    // TODO: gicp为什么不用了？
+
     NODELET_ERROR_STREAM("unknown registration method:" << reg_method);
     return nullptr;
   }
@@ -167,7 +159,6 @@ private:
     delta_estimater.reset(new DeltaEstimater(create_registration()));
 
     // initialize pose estimator
-    // 设置起点
     if(private_nh.param<bool>("specify_init_pose", true)) {
       NODELET_INFO("initialize pose estimator with specified parameters!!");
       pose_estimator.reset(new hdl_localization::PoseEstimator(registration,
@@ -179,14 +170,12 @@ private:
   }
 
 private:
-  // 注释详解：https://blog.csdn.net/lxj362343/article/details/105711524
   /**
    * @brief callback for imu data
    * @param imu_msg
    */
   void imu_callback(const sensor_msgs::ImuConstPtr& imu_msg) {
     std::lock_guard<std::mutex> lock(imu_data_mutex);
-    // 存进全局变量imu_data里，后边points_callback里用到
     imu_data.push_back(imu_msg);
   }
 
@@ -195,125 +184,89 @@ private:
    * @param points_msg
    */
   void points_callback(const sensor_msgs::PointCloud2ConstPtr& points_msg) {
-    // if globalmap = null
     if(!globalmap) {
       NODELET_ERROR("globalmap has not been received!!");
       return;
     }
-    // 以激光数据的时间戳为标准
+
     const auto& stamp = points_msg->header.stamp;
     pcl::PointCloud<PointT>::Ptr pcl_cloud(new pcl::PointCloud<PointT>());
-    // 转换格式到PointCloud
     pcl::fromROSMsg(*points_msg, *pcl_cloud);
 
     if(pcl_cloud->empty()) {
       NODELET_ERROR("cloud is empty!!");
       return;
     }
-    // 将点云转换到odom_child_frame_id坐标系，这里是velodyne
+
     // transform pointcloud into odom_child_frame_id
     std::string tfError;
     pcl::PointCloud<PointT>::Ptr cloud(new pcl::PointCloud<PointT>());
-    // tf2_ros::Buffer全局变量
-    /* canTransform bool类型
-      odom_child_frame_id是目标坐标系，pcl_cloud->header.frame_id（topic）是源坐标系
-      tfError返回如果转换失败的原因
-    */
     if(this->tf_buffer.canTransform(odom_child_frame_id, pcl_cloud->header.frame_id, stamp, ros::Duration(0.1), &tfError))
     {
-        // transformPointCloud bool类型
-        /* 第一个参数 odom_child_frame_id为目标坐标系，第二个参数为原始点云，第三个参数为目标点云
-          第四个参数为接收到的坐标变换（存到tf_buffer中，const tf::TransformListener &类型）
-        */
         if(!pcl_ros::transformPointCloud(odom_child_frame_id, *pcl_cloud, *cloud, this->tf_buffer)) {
             NODELET_ERROR("point cloud cannot be transformed into target frame!!");
             return;
         }
     }else
     {
-        // c_str()函数返回一个指向正规C字符串的指针常量, 内容与本string串相同
         NODELET_ERROR(tfError.c_str());
         return;
     }
-    // 对点云降采样，函数定义在下边
+
     auto filtered = downsample(cloud);
-    // last_scan ConstPtr pcl::PointCloud<PointT>::ConstPtr 存放降采样完成的点云
     last_scan = filtered;
-    // TODO:
-    //从用户调用"/relocalize" 服务到服务response 返回前, relocalizing = true;  
-    //response返回后, relocalizing = false;
-    //如果一直不调用relocalize, relocalizing会一直为false;
-    if(relocalizing) {//调用了重定位, 但是结果还未返回. 在这段时间的laser callback中relocalizing = 1
+
+    if(relocalizing) {
       delta_estimater->add_frame(filtered);
     }
 
     std::lock_guard<std::mutex> estimator_lock(pose_estimator_mutex);
-    // 等待位姿估计器初始化
     if(!pose_estimator) {
       NODELET_ERROR("waiting for initial pose input!!");
       return;
     }
-    // ukf mea中PQ分量
     Eigen::Matrix4f before = pose_estimator->matrix();
 
     // predict
     if(!use_imu) {
-      // 用常量速度模型把estimator状态从上一帧时刻预测到当前帧时刻
       pose_estimator->predict(stamp);
     } else {
       std::lock_guard<std::mutex> lock(imu_data_mutex);
       auto imu_iter = imu_data.begin();
-      // 利用imu数据迭代
       for(imu_iter; imu_iter != imu_data.end(); imu_iter++) {
-        // 若当前点云时间早于imu时间，跳出
-        // imu为预测值，点云为观测值
-        // 上一帧laser到当前帧laser之间的所有imu meas都用来做predict
         if(stamp < (*imu_iter)->header.stamp) {
           break;
         }
-        // 读取加速度和角速度
         const auto& acc = (*imu_iter)->linear_acceleration;
         const auto& gyro = (*imu_iter)->angular_velocity;
-        // 判断是否为倒置
         double acc_sign = invert_acc ? -1.0 : 1.0;
         double gyro_sign = invert_gyro ? -1.0 : 1.0;
         pose_estimator->predict((*imu_iter)->header.stamp, acc_sign * Eigen::Vector3f(acc.x, acc.y, acc.z), gyro_sign * Eigen::Vector3f(gyro.x, gyro.y, gyro.z));
       }
-      // 删除用过的imu数据
       imu_data.erase(imu_data.begin(), imu_iter);
     }
 
     // odometry-based prediction
-    // last_correction_time 返回ros::Time
     ros::Time last_correction_time = pose_estimator->last_correction_time();
-    // 是否用odom预测（default false）&& last_correction_time 不为0
     if(private_nh.param<bool>("enable_robot_odometry_prediction", false) && !last_correction_time.isZero()) {
       geometry_msgs::TransformStamped odom_delta;
-      // TODO: 与上边的canTransform定义不一样？
-      // odom_child_frame_id 目标坐标系， robot_odom_frame_id 源坐标系，前后两次"odom"-->"velodyne"
       if(tf_buffer.canTransform(odom_child_frame_id, last_correction_time, odom_child_frame_id, stamp, robot_odom_frame_id, ros::Duration(0.1))) {
-        // lookupTransform可以获得两个坐标系之间的转换关系，平移旋转
         odom_delta = tf_buffer.lookupTransform(odom_child_frame_id, last_correction_time, odom_child_frame_id, stamp, robot_odom_frame_id, ros::Duration(0));
       } else if(tf_buffer.canTransform(odom_child_frame_id, last_correction_time, odom_child_frame_id, ros::Time(0), robot_odom_frame_id, ros::Duration(0))) {
         odom_delta = tf_buffer.lookupTransform(odom_child_frame_id, last_correction_time, odom_child_frame_id, ros::Time(0), robot_odom_frame_id, ros::Duration(0));
-      }// 两次尝试transform，一次用激光的时间戳（stamp），另一次用ros的时间
+      }
 
-      // 若两次都失败打印log
       if(odom_delta.header.stamp.isZero()) {
         NODELET_WARN_STREAM("failed to look up transform between " << cloud->header.frame_id << " and " << robot_odom_frame_id);
       } else {
-        // Isometry3d构造变换矩阵
         Eigen::Isometry3d delta = tf2::transformToEigen(odom_delta);
         pose_estimator->predict_odom(delta.cast<float>().matrix());
       }
     }
 
     // correct
-    //用pose_estimator 来矫正点云。pcl库配准。获取到结果后利用ukf矫正位姿
     auto aligned = pose_estimator->correct(stamp, filtered);
 
-    // ros::Publisher aligned_pub
-    // 有订阅才发布
     if(aligned_pub.getNumSubscribers()) {
       aligned->header.frame_id = "map";
       aligned->header.stamp = cloud->header.stamp;
@@ -323,7 +276,7 @@ private:
     if(status_pub.getNumSubscribers()) {
       publish_scan_matching_status(points_msg->header, aligned);
     }
-    //发布里程计。时间戳为当前帧雷达时间，里程计位姿为ukf校正后位姿。同时也会发布从map到odom_child_frame_id的tf
+
     publish_odometry(points_msg->header.stamp, pose_estimator->matrix());
   }
 
@@ -335,16 +288,12 @@ private:
     NODELET_INFO("globalmap received!");
     pcl::PointCloud<PointT>::Ptr cloud(new pcl::PointCloud<PointT>());
     pcl::fromROSMsg(*points_msg, *cloud);
-    // 全局变量globalmap,PointCLoud
     globalmap = cloud;
-    // 全局变量registration，pcl注册表
-    // 发布出来的全局地图用作配准用的目标点云。这里就是globalmap_server_nodelet发出来的
+
     registration->setInputTarget(globalmap);
 
     if(use_global_localization) {
       NODELET_INFO("set globalmap for global localization!");
-      // TODO: 
-      // srv.request.global_map 获取 globalmap
       hdl_global_localization::SetGlobalMap srv;
       pcl::toROSMsg(*globalmap, srv.request.global_map);
 
@@ -360,9 +309,7 @@ private:
    * @brief perform global localization to relocalize the sensor position
    * @param
    */
-  // 空服务，rosservice call /relocalize 之后调用relocalize()，无response
   bool relocalize(std_srvs::EmptyRequest& req, std_srvs::EmptyResponse& res) {
-    // pcl::PointCloud<PointT>::ConstPtr类型，存的是降采样之后的一帧点云
     if(last_scan == nullptr) {
       NODELET_INFO_STREAM("no scan has been received");
       return false;
@@ -374,17 +321,18 @@ private:
 
     hdl_global_localization::QueryGlobalLocalization srv;
     pcl::toROSMsg(*scan, srv.request.cloud);
-    // 候选数量
     srv.request.max_num_candidates = 1;
-    // TODO:
-    // ros::ServiceClient onInit中设置好的client
+    srv.request.lat = latitude;
+    srv.request.lon = longitude;
+    NODELET_INFO_STREAM("Lat is :" << srv.request.lat);
+    NODELET_INFO_STREAM("Lon is :" << srv.request.lon);
+
     if(!query_global_localization_service.call(srv) || srv.response.poses.empty()) {
       relocalizing = false;
       NODELET_INFO_STREAM("global localization failed");
       return false;
     }
 
-    // 提出reponse的第一个点
     const auto& result = srv.response.poses[0];
 
     NODELET_INFO_STREAM("--- Global localization result ---");
@@ -428,14 +376,28 @@ private:
     );
   }
 
+  void rtk_callback(const geometry_msgs::PoseConstPtr& position_msg) {
+    NODELET_INFO("rtk position received!!");
+    std::lock_guard<std::mutex> lock(pose_estimator_mutex);
+    const auto& rtk_p = position_msg->position;
+    const auto& rtk_q = position_msg->orientation;
+    latitude = rtk_p.x;
+    longitude = rtk_p.y;
+    // pose_estimator.reset(
+    //       new hdl_localization::PoseEstimator(
+    //         registration,
+    //         Eigen::Vector3f(rtk_p.x, rtk_p.y, rtk_p.z),
+    //         Eigen::Quaternionf(rtk_q.w, rtk_q.x, rtk_q.y, rtk_q.z),
+    //         private_nh.param<double>("cool_time_duration", 0.5))
+    // );
+  }
+
   /**
    * @brief downsampling
    * @param cloud   input cloud
    * @return downsampled cloud
    */
   pcl::PointCloud<PointT>::ConstPtr downsample(const pcl::PointCloud<PointT>::ConstPtr& cloud) const {
-    // pcl::Filter<PointT>::Ptr downsample_filter;
-    // 如果downsample_filter 为nullptr
     if(!downsample_filter) {
       return cloud;
     }
@@ -455,29 +417,22 @@ private:
    */
   void publish_odometry(const ros::Time& stamp, const Eigen::Matrix4f& pose) {
     // broadcast the transform over tf
-    // 判断velodyne和odom能不能转换，如果能，实现velodyne-->odom-->map
     if(tf_buffer.canTransform(robot_odom_frame_id, odom_child_frame_id, ros::Time(0))) {
-      // TODO:
-      // 为什么用pose的逆？从frame到map是破色，从map到frame就是pose的逆？
       geometry_msgs::TransformStamped map_wrt_frame = tf2::eigenToTransform(Eigen::Isometry3d(pose.inverse().cast<double>()));
       map_wrt_frame.header.stamp = stamp;
       map_wrt_frame.header.frame_id = odom_child_frame_id;
       map_wrt_frame.child_frame_id = "map";
-      // frame到odom，目标坐标系robot_odom_frame_id（odom）,源坐标系odom_child_frame_id（velodyne）
+
       geometry_msgs::TransformStamped frame_wrt_odom = tf_buffer.lookupTransform(robot_odom_frame_id, odom_child_frame_id, ros::Time(0), ros::Duration(0.1));
       Eigen::Matrix4f frame2odom = tf2::transformToEigen(frame_wrt_odom).cast<float>().matrix();
 
-      // doTransform() map_wrt_frame、map_wrt_odom、frame_wrt_odom都是geometry_msgs::TransformStamped
-      // 得到map到odom的坐标变换
       geometry_msgs::TransformStamped map_wrt_odom;
       tf2::doTransform(map_wrt_frame, map_wrt_odom, frame_wrt_odom);
 
       tf2::Transform odom_wrt_map;
       tf2::fromMsg(map_wrt_odom.transform, odom_wrt_map);
-      // odom_wrt_map = map_wrt_odom的逆
       odom_wrt_map = odom_wrt_map.inverse();
-      // TODO:
-      //将tf（based on odom）发布出去（based on map），子坐标系odom
+
       geometry_msgs::TransformStamped odom_trans;
       odom_trans.transform = tf2::toMsg(odom_wrt_map);
       odom_trans.header.stamp = stamp;
@@ -485,8 +440,6 @@ private:
       odom_trans.child_frame_id = robot_odom_frame_id;
 
       tf_broadcaster.sendTransform(odom_trans);
-    // TODO:
-    // 如果velodyne和odom能不能转换，直接发布pose作为velodyne到map的tf
     } else {
       geometry_msgs::TransformStamped odom_trans = tf2::eigenToTransform(Eigen::Isometry3d(pose.cast<double>()));
       odom_trans.header.stamp = stamp;
@@ -496,7 +449,6 @@ private:
     }
 
     // publish the transform
-    // 发布odometry，子坐标系velodyne，用ukf得到的位姿作为pose，twist置0
     nav_msgs::Odometry odom;
     odom.header.stamp = stamp;
     odom.header.frame_id = "map";
@@ -587,6 +539,10 @@ private:
   ros::Subscriber points_sub;
   ros::Subscriber globalmap_sub;
   ros::Subscriber initialpose_sub;
+  ros::Subscriber rtk_sub;
+
+  double latitude;
+  double longitude;
 
   ros::Publisher pose_pub;
   ros::Publisher aligned_pub;

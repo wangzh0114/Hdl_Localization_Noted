@@ -2,13 +2,13 @@
 <launch>
   <!-- arguments -->
   <arg name="nodelet_manager" default="velodyne_nodelet_manager" />
-  <arg name="points_topic" default="/velodyne_points" />
+  <arg name="points_topic" default="/pandar" />
   <!-- input clouds are transformed in odom_child_frame, and then localization is performed in that frame -->
   <!-- this is useful to match the LIDAR and IMU coodinate systems -->
-  <arg name="odom_child_frame_id" default="velodyne" />
+  <arg name="odom_child_frame_id" default="PandarXT-16" />
 
   <!-- optional arguments -->
-  <arg name="use_imu" default="false" />
+  <arg name="use_imu" default="ture" />
   <arg name="invert_imu_acc" default="false" />
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="true" />
@@ -24,9 +24,9 @@
 
     <!-- globalmap_server_nodelet -->
     <node pkg="nodelet" type="nodelet" name="globalmap_server_nodelet" args="load hdl_localization/GlobalmapServerNodelet $(arg nodelet_manager)">
-      <param name="globalmap_pcd" value="$(find hdl_localization)/data/map.pcd" />
+      <param name="globalmap_pcd" value="$(find hdl_localization)/data/map_midea.pcd" />
       <param name="convert_utm_to_local" value="true" />
-      <param name="downsample_resolution" value="0.1" />
+      <param name="downsample_resolution" value="0.5" />
     </node>
 
     <!-- hdl_localization_nodelet -->
@@ -51,10 +51,10 @@
       <param name="ndt_neighbor_search_method" value="DIRECT7" />
       <param name="ndt_neighbor_search_radius" value="2.0" />
       <param name="ndt_resolution" value="1.0" />
-      <param name="downsample_resolution" value="0.1" />
+      <param name="downsample_resolution" value="0.2" />
       <!-- if "specify_init_pose" is true, pose estimator will be initialized with the following params -->
       <!-- otherwise, you need to input an initial pose with "2D Pose Estimate" on rviz" -->
-      <param name="specify_init_pose" value="true" />
+      <param name="specify_init_pose" value="ture" />
       <param name="init_pos_x" value="0.0" />
       <param name="init_pos_y" value="0.0" />
       <param name="init_pos_z" value="0.0" />

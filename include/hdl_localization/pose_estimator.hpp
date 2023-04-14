@@ -83,7 +83,7 @@ private:
   ros::Time init_stamp;             // when the estimator was initialized
   ros::Time prev_stamp;             // when the estimator was updated last time
   ros::Time last_correction_stamp;  // when the estimator performed the correction step
-  double cool_time_duration;        // 从init时刻开始算起，过了这段冷却时间后，estimator才开始用imu数据或者常量模型做predict
+  double cool_time_duration;        //
 
   Eigen::MatrixXf process_noise;
   std::unique_ptr<kkl::alg::UnscentedKalmanFilterX<float, PoseSystem>> ukf;

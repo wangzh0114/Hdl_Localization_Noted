@@ -49,7 +49,7 @@ public:
     lambda(1),
     normal_dist(0.0, 1.0)
   {
-    weights.resize(S, 1); // 作者把cov_w, 和mean_w近似认为两个相等， 3.67式
+    weights.resize(S, 1);
     sigma_points.resize(S, N);
     ext_weights.resize(2 * (N + K) + 1, 1);
     ext_sigma_points.resize(2 * (N + K) + 1, N + K);
@@ -62,7 +62,7 @@ public:
     }
 
     // weights for extended state space which includes error variances
-    ext_weights[0] = lambda / (N + K + lambda); // 扩展状态包含了measurement
+    ext_weights[0] = lambda / (N + K + lambda);
     for (int i = 1; i < 2 * (N + K) + 1; i++) {
       ext_weights[i] = 1 / (2 * (N + K + lambda));
     }
@@ -72,37 +72,31 @@ public:
    * @brief predict
    * @param control  input vector
    */
-  void predict() { // 没有imu数据时，用常量速度模型把从estimator状态从上一帧时刻预测到当前帧时刻
+  void predict() {
     // calculate sigma points
     ensurePositiveFinite(cov);
     computeSigmaPoints(mean, cov, sigma_points);
-    // sigma_points更新,用在posesystem中定义的f函数来进行
     for (int i = 0; i < S; i++) {
-      sigma_points.row(i) = system.f(sigma_points.row(i)); //《probabilistic robotics》 Table 3.4 line 3.
+      sigma_points.row(i) = system.f(sigma_points.row(i));
     }
-    /*----至此，sigma_points里存储的就是当前时刻的由ukf输出的系统状态-----*/
 
-    // 过程噪声，即ukf中的矩阵R
     const auto& R = process_noise;
 
-    // unscented transform 定义当前的平均状态和协方差矩阵，并设置为0矩阵
+    // unscented transform
     VectorXt mean_pred(mean.size());
     MatrixXt cov_pred(cov.rows(), cov.cols());
 
     mean_pred.setZero();
     cov_pred.setZero();
-    // 加权平均，预测状态
     for (int i = 0; i < S; i++) {
       mean_pred += weights[i] * sigma_points.row(i);
     }
-    // 根据状态预测协方差
     for (int i = 0; i < S; i++) {
       VectorXt diff = sigma_points.row(i).transpose() - mean_pred;
       cov_pred += weights[i] * diff * diff.transpose();
     }
-    // 附加过程噪声R，在pose_estimator中给出初值
     cov_pred += R;
-    // 更新mean和cov
+
     mean = mean_pred;
     cov = cov_pred;
   }
@@ -111,37 +105,31 @@ public:
    * @brief predict
    * @param control  input vector
    */
-  void predict(const VectorXt& control) { //上一帧laser到当前帧laser之间的所有imu meas, 每来一次imu mea，把estimator的状态做一次predict
+  void predict(const VectorXt& control) {
     // calculate sigma points
     ensurePositiveFinite(cov);
     computeSigmaPoints(mean, cov, sigma_points);
-    // sigma_points更新,用在posesystem中定义的f函数来进行
     for (int i = 0; i < S; i++) {
-      sigma_points.row(i) = system.f(sigma_points.row(i), control); // (acc, gyro), 加速度没有去重力分量
+      sigma_points.row(i) = system.f(sigma_points.row(i), control);
     }
-    /*----至此，sigma_points里存储的就是当前时刻的由ukf输出的系统状态-----*/
 
-    // 过程噪声，即ukf中的矩阵R
     const auto& R = process_noise;
 
-    // unscented transform 定义当前的平均状态和协方差矩阵，并设置为0矩阵
+    // unscented transform
     VectorXt mean_pred(mean.size());
     MatrixXt cov_pred(cov.rows(), cov.cols());
 
     mean_pred.setZero();
     cov_pred.setZero();
-    // 加权平均，预测状态
     for (int i = 0; i < S; i++) {
       mean_pred += weights[i] * sigma_points.row(i);
     }
-    // 根据状态预测协方差
     for (int i = 0; i < S; i++) {
       VectorXt diff = sigma_points.row(i).transpose() - mean_pred;
       cov_pred += weights[i] * diff * diff.transpose();
     }
-    // 附加过程噪声R，在pose_estimator中给出初值
     cov_pred += R;
-    // 更新mean和cov
+
     mean = mean_pred;
     cov = cov_pred;
   }
@@ -150,37 +138,24 @@ public:
    * @brief correct
    * @param measurement  measurement vector
    */
-  void correct(const VectorXt& measurement) { // ndt在k时刻初值的基础上匹配计算出来k时刻的P，Q
-    // N-状态方程维度,K-观测维度
+  void correct(const VectorXt& measurement) {
     // create extended state space which includes error variances
     VectorXt ext_mean_pred = VectorXt::Zero(N + K, 1);
     MatrixXt ext_cov_pred = MatrixXt::Zero(N + K, N + K);
-    // 左上角N行1列
-    ext_mean_pred.topLeftCorner(N, 1) = VectorXt(mean); // mean: 预测k时刻状态的均值
-    // 左上角N行N列
-    ext_cov_pred.topLeftCorner(N, N) = MatrixXt(cov);   // cov:  预测k时刻状态的cov
-    // 右下角K行K列,初始化为在pose_estimator输入的噪声,位置噪声0.01，四元数0.001
+    ext_mean_pred.topLeftCorner(N, 1) = VectorXt(mean);
+    ext_cov_pred.topLeftCorner(N, N) = MatrixXt(cov);
     ext_cov_pred.bottomRightCorner(K, K) = measurement_noise;
-    // ext_cov_pred.bottomRightCorner(K, K) = measurement_noise; 
-    //计算sigma points时不应该加测量噪声，注释掉上面行
 
-    /*------- 经过以上操作，现在扩展状态变量前N项为mean，扩展协方差左上角为N*N的cov，右下角为K*K的观测噪声--------*/
-
-    // 验证并计算
     ensurePositiveFinite(ext_cov_pred);
-    // 利用扩展状态空间的参数计算sigma点
-    computeSigmaPoints(ext_mean_pred, ext_cov_pred, ext_sigma_points); // line 6. 预测出来k时刻状态的sigma points
+    computeSigmaPoints(ext_mean_pred, ext_cov_pred, ext_sigma_points);
 
     // unscented transform
-    // ext_sigma_points、expected_measurements是（2 * (N + K) + 1, K)的矩阵
     expected_measurements.setZero();
     for (int i = 0; i < ext_sigma_points.rows(); i++) {
       expected_measurements.row(i) = system.h(ext_sigma_points.row(i).transpose().topLeftCorner(N, 1));
-      // line 7. 用预测出来k时刻sigma points代到测量方程，得到k时刻预测的测量值(sigma points表示）
       expected_measurements.row(i) += VectorXt(ext_sigma_points.row(i).transpose().bottomRightCorner(K, 1));
     }
 
-    // 加权平均,同predict函数相似
     VectorXt expected_measurement_mean = VectorXt::Zero(K);
     for (int i = 0; i < ext_sigma_points.rows(); i++) {
       expected_measurement_mean += ext_weights[i] * expected_measurements.row(i);
@@ -192,22 +167,20 @@ public:
     }
 
     // calculated transformed covariance
-    // 转换方差,用于计算sigama，进而计算卡尔曼增益
     MatrixXt sigma = MatrixXt::Zero(N + K, K);
     for (int i = 0; i < ext_sigma_points.rows(); i++) {
-      auto diffA = (ext_sigma_points.row(i).transpose() - ext_mean_pred); // 预测出来k时刻状态的均值 和 预测出来k时刻状态的sigma points 之间的差异
-      auto diffB = (expected_measurements.row(i).transpose() - expected_measurement_mean); // 预测出来k时刻测量值的均值 和 预测出来k时刻测量值的sigma points之间的差异
+      auto diffA = (ext_sigma_points.row(i).transpose() - ext_mean_pred);
+      auto diffB = (expected_measurements.row(i).transpose() - expected_measurement_mean);
       sigma += ext_weights[i] * (diffA * diffB.transpose());
     }
 
-    kalman_gain = sigma * expected_measurement_cov.inverse(); // line 11.
+    kalman_gain = sigma * expected_measurement_cov.inverse();
     const auto& K = kalman_gain;
 
-    // 更新最后的ukf
     VectorXt ext_mean = ext_mean_pred + K * (measurement - expected_measurement_mean);
     MatrixXt ext_cov = ext_cov_pred - K * expected_measurement_cov * K.transpose();
 
-    mean = ext_mean.topLeftCorner(N, 1); // 最终k时刻laser在map下的位姿是由 line 12. 决定
+    mean = ext_mean.topLeftCorner(N, 1);
     cov = ext_cov.topLeftCorner(N, N);
   }
 
@@ -269,16 +242,14 @@ private:
     const int n = mean.size();
     assert(cov.rows() == n && cov.cols() == n);
 
-    //llt分解,求Cholesky分解A=LL^*=U^*U,L是下三角矩阵
     Eigen::LLT<MatrixXt> llt;
     llt.compute((n + lambda) * cov);
     MatrixXt l = llt.matrixL();
 
-    // mean是列向量,这里会自动转置处理
     sigma_points.row(0) = mean;
     for (int i = 0; i < n; i++) {
-      sigma_points.row(1 + i * 2) = mean + l.col(i); // 奇数1357
-      sigma_points.row(1 + i * 2 + 1) = mean - l.col(i); // 偶数2468
+      sigma_points.row(1 + i * 2) = mean + l.col(i);
+      sigma_points.row(1 + i * 2 + 1) = mean - l.col(i);
     }
   }
 
@@ -286,13 +257,13 @@ private:
    * @brief make covariance matrix positive finite
    * @param cov  covariance matrix
    */
-  void ensurePositiveFinite(MatrixXt& cov) { // 未实际应用
+  void ensurePositiveFinite(MatrixXt& cov) {
     return;
     const double eps = 1e-9;
 
     Eigen::EigenSolver<MatrixXt> solver(cov);
-    MatrixXt D = solver.pseudoEigenvalueMatrix(); // 特征值
-    MatrixXt V = solver.pseudoEigenvectors();     // 特征向量
+    MatrixXt D = solver.pseudoEigenvalueMatrix();
+    MatrixXt V = solver.pseudoEigenvectors();
     for (int i = 0; i < D.rows(); i++) {
       if (D(i, i) < eps) {
         D(i, i) = eps;

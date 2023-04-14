@@ -34,10 +34,10 @@ public:
     Vector3t gyro_bias = state.middleRows(13, 3);
 
     // position
-    next_state.middleRows(0, 3) = pt + vt * dt;  // 常量速度模型： 从上一估计时刻到当前预测时刻期间，线速度v保持不变
+    next_state.middleRows(0, 3) = pt + vt * dt;  //
 
     // velocity
-    next_state.middleRows(3, 3) = vt; // 没有输入的常量速度模型，除了P更新外，V Q Ba Bg保持不变
+    next_state.middleRows(3, 3) = vt;
 
     // orientation
     Quaterniont qt_ = qt;
@@ -88,7 +88,7 @@ public:
   }
 
   // observation equation
-  VectorXt h(const VectorXt& state) const { // 测量方程为单位阵
+  VectorXt h(const VectorXt& state) const {
     VectorXt observation(7);
     observation.middleRows(0, 3) = state.middleRows(0, 3);
     observation.middleRows(3, 4) = state.middleRows(6, 4).normalized();

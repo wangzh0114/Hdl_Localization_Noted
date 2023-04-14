@@ -22,8 +22,7 @@ public:
 
 public:
   // system equation
-  VectorXt f(const VectorXt& state, // 从k-1时刻状态中提取的每个sigma points
-             const VectorXt& control) const { // laser k-1时刻到 laser k时刻的delta变换
+  VectorXt f(const VectorXt& state, const VectorXt& control) const {
     Matrix4t pt = Matrix4t::Identity();
     pt.block<3, 1>(0, 3) = Vector3t(state[0], state[1], state[2]);
     pt.block<3, 3>(0, 0) = Quaterniont(state[3], state[4], state[5], state[6]).normalized().toRotationMatrix();
